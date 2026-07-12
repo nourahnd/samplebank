@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lib/pq"
 	db "github.com/nourahnd/samplebank/db/sqlc"
 )
 
@@ -16,7 +17,7 @@ type createAccountReq struct {
 func (server *Server) createAccount(ctx *gin.Context) {
 	var req createAccountReq
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, errorResponse(err))
+		ctx.JSON(http.StatusBadRequest, errorResponse(ErrInvalidID))
 		return
 	}
 
@@ -27,7 +28,7 @@ func (server *Server) createAccount(ctx *gin.Context) {
 	}
 	account, err := server.store.CreateAccount(ctx, arg)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, errorResponse(err))
+		ctx.JSON(http.StatusInternalServerError, errorResponse(ErrInternal))
 		return
 	}
 
@@ -35,24 +36,24 @@ func (server *Server) createAccount(ctx *gin.Context) {
 
 }
 
-type getAccountReq struct {
+type accountIDUri struct {
 	ID int64 `uri:"id" binding:"required,min=1"`
 }
 
 func (server *Server) getAccount(ctx *gin.Context) {
-	var req getAccountReq
+	var req accountIDUri
 	if err := ctx.ShouldBindUri(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, errorResponse(err))
+		ctx.JSON(http.StatusBadRequest, errorResponse(ErrInvalidID))
 		return
 	}
 
 	account, err := server.store.GetAccount(ctx, req.ID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			ctx.JSON(http.StatusNotFound, errorResponse(err))
+			ctx.JSON(http.StatusNotFound, errorResponse(ErrAccountNotFound))
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, errorResponse(err))
+		ctx.JSON(http.StatusInternalServerError, errorResponse(ErrInternal))
 		return
 	}
 
@@ -67,7 +68,7 @@ type getListOfAccountsReq struct {
 func (server *Server) getListOfAccounts(ctx *gin.Context) {
 	var req getListOfAccountsReq
 	if err := ctx.ShouldBindQuery(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, errorResponse(err))
+		ctx.JSON(http.StatusBadRequest, errorResponse(ErrInvalidReq))
 		return
 	}
 
@@ -77,9 +78,38 @@ func (server *Server) getListOfAccounts(ctx *gin.Context) {
 	}
 	accounts, err := server.store.ListAccounts(ctx, arg)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, errorResponse(err))
+		ctx.JSON(http.StatusInternalServerError, errorResponse(ErrInternal))
 		return
 	}
 	ctx.JSON(http.StatusOK, accounts)
 
+}
+
+func (server *Server) deleteAccount(ctx *gin.Context) {
+	var req accountIDUri
+	if err := ctx.ShouldBindUri(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, errorResponse(ErrInvalidID))
+		return
+	}
+
+	rows, err := server.store.DeleteAccount(ctx, req.ID)
+	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok {
+			switch pqErr.Code {
+			case "23503":
+				ctx.JSON(http.StatusConflict, errorResponse(ErrAccountHasTransfers))
+				return
+			}
+		}
+
+		ctx.JSON(http.StatusInternalServerError, errorResponse(ErrInternal))
+		return
+	}
+
+	if rows == 0 {
+		ctx.JSON(http.StatusNotFound, errorResponse(ErrAccountNotFound))
+		return
+	}
+
+	ctx.Status(http.StatusNoContent)
 }
